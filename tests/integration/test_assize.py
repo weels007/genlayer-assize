@@ -39,6 +39,11 @@ RETRY_PAUSE = 20
 BOND = 200
 APPEAL_STAKE = 2 * BOND
 WINDOW = 60
+# The ruling's timestamp is the rule transaction's own clock, and Studio can take
+# longer than the minimum window to execute the appeal that follows it. The case
+# that is meant to be appealed therefore gets an hour; the settle test keeps the
+# minimum, because that one needs the window to close.
+APPEAL_WINDOW = 3600
 SOURCE_URL = "https://raw.githubusercontent.com/weels007/genlayer-vow/main/README.md"
 CLAIM_TEXT = (
     "The project is an Intelligent Contract for GenLayer that reads evidence from "
@@ -231,13 +236,19 @@ def _rule(client, account, contract, case_id):
 
 
 def _appeal(client, loser, contract, case_id, ground="RECORD"):
+    credit_before = _credit(client, contract, loser)
     _expect_ok(
         client, loser, contract, "appeal", [case_id, ground], value=APPEAL_STAKE
     )
     record = _case(client, contract, case_id)
-    assert record["status"] == "APPEALED", (
-        f"the appeal was refused — a payable refusal answers 'credit': {record}"
-    )
+    if record["status"] != "APPEALED":
+        refunded = _credit(client, contract, loser) - credit_before
+        raise AssertionError(
+            "the appeal was refused — a payable refusal answers 'credit': "
+            f"status {record['status']!r}, ruled at {record['ruled_ts']}, "
+            f"appeal closed at {record['appeal_deadline']}, "
+            f"the runner's clock {int(time.time())}, credit +{refunded}: {record}"
+        )
     return record
 
 
@@ -314,7 +325,7 @@ def test_02_a_case_is_ruled_and_settled(client, account, opponent, contract):
 
 
 def test_03_an_appeal_is_heard_and_settled(client, account, opponent, contract):
-    case_id = _file(client, account, contract, "live-2")
+    case_id = _file(client, account, contract, "live-2", window=APPEAL_WINDOW)
     _contest(client, opponent, contract, case_id)
 
     record = _rule(client, account, contract, case_id)
