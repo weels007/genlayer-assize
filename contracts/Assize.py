@@ -271,8 +271,16 @@ def _coerce_payload(raw) -> dict:
     raise gl.vm.UserError(ERROR_LLM + ":unsupported_llm_response")
 
 
-def _normalize_word(raw, allowed) -> str:
+def _normalize_choice(raw, allowed) -> str:
+    """Map a model's word onto the allowed set, with SILENT meaning "undecided".
+
+    An undecided judgement has to be expressible: if it were an error instead,
+    the write would roll back and the attempt counter would never move, so a case
+    the committee cannot decide could never be voided.
+    """
     word = _clean_text(str(raw)).upper()
+    if "SILENT" in word or "UNDECIDED" in word:
+        return ""
     for candidate in allowed:
         if candidate in word:
             return candidate
@@ -517,7 +525,7 @@ Rules:
 """
             raw = gl.nondet.exec_prompt(prompt, response_format="json")
             payload = _coerce_payload(raw)
-            decision = _normalize_word(
+            decision = _normalize_choice(
                 payload.get("decision", payload.get("verdict", "")), DECISIONS
             )
             reason = _clean_text(str(payload.get("reason", "")))[:MAX_REASON_CHARS]
@@ -1044,16 +1052,17 @@ def _build_ruling(raw, page_text: str) -> dict:
     """Turn a model response into the payload validators compare."""
     payload = _coerce_payload(raw)
 
-    ruling = _normalize_word(payload.get("ruling", payload.get("verdict", "")), RULINGS)
+    ruling = _normalize_choice(payload.get("ruling", payload.get("verdict", "")), RULINGS)
     reason = _clean_text(str(payload.get("reason", "")))
     raw_quote = payload.get("quote", payload.get("evidence_quote", ""))
 
     quote = ""
-    try:
-        quote = _ground_quote(raw_quote, page_text)
-    except gl.vm.UserError:
-        ruling = ""
-        reason = (reason + " [citation could not be grounded in the page]").strip()
+    if ruling:
+        try:
+            quote = _ground_quote(raw_quote, page_text)
+        except gl.vm.UserError:
+            ruling = ""
+            reason = (reason + " [citation could not be grounded in the page]").strip()
 
     if len(reason) > MAX_REASON_CHARS:
         reason = reason[:MAX_REASON_CHARS]
@@ -1070,17 +1079,18 @@ def _build_decision(raw, page_text: str) -> dict:
     """Turn a model response into the appeal payload validators compare."""
     payload = _coerce_payload(raw)
 
-    decision = _normalize_word(
+    decision = _normalize_choice(
         payload.get("decision", payload.get("verdict", "")), DECISIONS
     )
     reason = _clean_text(str(payload.get("reason", "")))
     raw_quote = payload.get("quote", "")
 
     quote = ""
-    try:
-        quote = _ground_quote(raw_quote, page_text)
-    except gl.vm.UserError:
-        quote = ""
+    if decision:
+        try:
+            quote = _ground_quote(raw_quote, page_text)
+        except gl.vm.UserError:
+            quote = ""
 
     if len(reason) > MAX_REASON_CHARS:
         reason = reason[:MAX_REASON_CHARS]

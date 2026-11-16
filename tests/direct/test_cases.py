@@ -217,7 +217,9 @@ def test_a_case_cannot_be_contested_twice(
 
     assert contract.get_credit(direct_owner) == BOND
     assert contract.get_case(case_id)["status"] == "CONTESTED"
-    assert contract.get_ledger()["locked_total"] == 2 * BOND
+
+    # The refused stake stays locked as a credit until it is withdrawn.
+    assert contract.get_ledger()["locked_total"] == 3 * BOND
 
 
 def test_an_uncontested_filing_can_be_withdrawn(
