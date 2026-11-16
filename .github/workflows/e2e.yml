@@ -1,0 +1,112 @@
+name: E2E (deployed contract)
+
+# The money paths the Studio suite leaves out, against the PINNED court in
+# deployment.json: a mismatched stake becomes a credit and comes back, a filer
+# cannot contest their own case, an uncontested filing can be withdrawn, a
+# contested one cannot, void is refused before it is earned, and a stranger
+# cannot withdraw somebody else's bond.
+#
+# No model is called here on purpose.
+
+on:
+  workflow_dispatch:
+
+  workflow_run:
+    workflows: ["Deploy Contract"]
+    types: [completed]
+
+  push:
+    paths:
+      - "tests/e2e/**"
+      - "deployment.json"
+      - ".github/workflows/e2e.yml"
+
+# Shared with the Studio suite: both drive the same deployed court.
+concurrency:
+  group: live-suite
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Money paths on the deployed contract
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Check the wallet secrets
+        id: secrets
+        run: |
+          if [ -z "${{ secrets.ASSIZE_DEPLOYER_KEYSTORE }}" ] && [ -z "${{ secrets.SURETY_DEPLOYER_KEYSTORE }}" ] && [ -z "${{ secrets.GAUNTLET_DEPLOYER_KEYSTORE }}" ]; then
+            echo "::notice title=E2E skipped::Add ASSIZE_DEPLOYER_KEYSTORE and ASSIZE_DEPLOYER_PASSWORD (or the SURETY_ or GAUNTLET_ pair) to drive the deployed court."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -z "${{ secrets.ASSIZE_TESTER2_KEYSTORE }}" ] && [ -z "${{ secrets.SURETY_TESTER2_KEYSTORE }}" ] && [ -z "${{ secrets.GAUNTLET_TESTER2_KEYSTORE }}" ]; then
+            echo "::warning title=Second-side cases skipped::No keystore is filed under tester2, so the cases that need a second side skip."
+          fi
+
+      - name: Which wallets are configured
+        if: steps.secrets.outputs.skip != 'true'
+        run: |
+          python - <<'PY'
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from wallet import load_account, named_env_present
+
+          seen = {}
+          for name in ("tester1", "tester2"):
+              try:
+                  address = str(load_account(name).address)
+              except SystemExit as error:
+                  print(f"{name}: unavailable ({error})")
+                  continue
+              matches = [
+                  other
+                  for other, other_address in seen.items()
+                  if other_address.lower() == address.lower()
+              ]
+              print(f"{name}: {address} (own keystore: {named_env_present(name)})")
+              for other in matches:
+                  print(f"  {name} and {other} resolve to the same account")
+              seen[name] = address
+          PY
+        env:
+          ASSIZE_DEPLOYER_KEYSTORE: ${{ secrets.ASSIZE_DEPLOYER_KEYSTORE }}
+          ASSIZE_DEPLOYER_PASSWORD: ${{ secrets.ASSIZE_DEPLOYER_PASSWORD }}
+          SURETY_DEPLOYER_KEYSTORE: ${{ secrets.SURETY_DEPLOYER_KEYSTORE }}
+          SURETY_DEPLOYER_PASSWORD: ${{ secrets.SURETY_DEPLOYER_PASSWORD }}
+          GAUNTLET_DEPLOYER_KEYSTORE: ${{ secrets.GAUNTLET_DEPLOYER_KEYSTORE }}
+          GAUNTLET_DEPLOYER_PASSWORD: ${{ secrets.GAUNTLET_DEPLOYER_PASSWORD }}
+          ASSIZE_TESTER2_KEYSTORE: ${{ secrets.ASSIZE_TESTER2_KEYSTORE }}
+          ASSIZE_TESTER2_PASSWORD: ${{ secrets.ASSIZE_TESTER2_PASSWORD }}
+          ASSIZE_TESTER_KEYSTORE2: ${{ secrets.ASSIZE_TESTER_KEYSTORE2 }}
+          ASSIZE_TESTER_PASSWORD2: ${{ secrets.ASSIZE_TESTER_PASSWORD2 }}
+          SURETY_TESTER2_KEYSTORE: ${{ secrets.SURETY_TESTER2_KEYSTORE }}
+          SURETY_TESTER2_PASSWORD: ${{ secrets.SURETY_TESTER2_PASSWORD }}
+          GAUNTLET_TESTER2_KEYSTORE: ${{ secrets.GAUNTLET_TESTER2_KEYSTORE }}
+          GAUNTLET_TESTER2_PASSWORD: ${{ secrets.GAUNTLET_TESTER2_PASSWORD }}
+
+      - name: End to end
+        if: steps.secrets.outputs.skip != 'true'
+        env:
+          ASSIZE_DEPLOYER_KEYSTORE: ${{ secrets.ASSIZE_DEPLOYER_KEYSTORE }}
+          ASSIZE_DEPLOYER_PASSWORD: ${{ secrets.ASSIZE_DEPLOYER_PASSWORD }}
+          SURETY_DEPLOYER_KEYSTORE: ${{ secrets.SURETY_DEPLOYER_KEYSTORE }}
+          SURETY_DEPLOYER_PASSWORD: ${{ secrets.SURETY_DEPLOYER_PASSWORD }}
+          GAUNTLET_DEPLOYER_KEYSTORE: ${{ secrets.GAUNTLET_DEPLOYER_KEYSTORE }}
+          GAUNTLET_DEPLOYER_PASSWORD: ${{ secrets.GAUNTLET_DEPLOYER_PASSWORD }}
+          ASSIZE_TESTER2_KEYSTORE: ${{ secrets.ASSIZE_TESTER2_KEYSTORE }}
+          ASSIZE_TESTER2_PASSWORD: ${{ secrets.ASSIZE_TESTER2_PASSWORD }}
+          ASSIZE_TESTER_KEYSTORE2: ${{ secrets.ASSIZE_TESTER_KEYSTORE2 }}
+          ASSIZE_TESTER_PASSWORD2: ${{ secrets.ASSIZE_TESTER_PASSWORD2 }}
+          SURETY_TESTER2_KEYSTORE: ${{ secrets.SURETY_TESTER2_KEYSTORE }}
+          SURETY_TESTER2_PASSWORD: ${{ secrets.SURETY_TESTER2_PASSWORD }}
+          GAUNTLET_TESTER2_KEYSTORE: ${{ secrets.GAUNTLET_TESTER2_KEYSTORE }}
+          GAUNTLET_TESTER2_PASSWORD: ${{ secrets.GAUNTLET_TESTER2_PASSWORD }}
+        run: pytest tests/e2e -v -s -rs

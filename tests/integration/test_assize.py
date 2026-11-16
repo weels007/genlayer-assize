@@ -1,0 +1,364 @@
+"""Assize on studionet: a filing, a contest, a ruling, and an appeal.
+
+The court has no owner and no reset, so every assertion is a delta — a count, a
+ledger total compared before and after — and the suite tolerates cases and
+credits left behind by an earlier run.
+
+The two sides are played by two different wallets, because the contract refuses a
+filer's own contest. Every claim reference is suffixed with the run's start time,
+because a reference is caller-scoped and permanent.
+
+A live committee cannot be ordered to rule, so each case asserts the law for
+whichever ruling appears and reports it: a ruling is settled after its appeal
+window, an appeal is settled when the second instance answers, and a case nobody
+could decide is voided with both stakes back.
+
+    pytest tests/integration -v -s
+"""
+
+import json
+import re
+import sys
+import time
+from pathlib import Path
+
+import pytest
+from genlayer_py import create_client, studionet
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from wallet import load_account  # noqa: E402
+
+DEPLOYMENT_PATH = ROOT / "deployment.json"
+ADDRESS_VALUE = re.compile(r"0x[0-9a-fA-F]{40}")
+
+POLL_INTERVAL = 10_000
+POLL_RETRIES = 60
+RETRY_PAUSE = 20
+
+BOND = 200
+APPEAL_STAKE = 2 * BOND
+WINDOW = 60
+SOURCE_URL = "https://raw.githubusercontent.com/weels007/genlayer-vow/main/README.md"
+CLAIM_TEXT = (
+    "The project is an Intelligent Contract for GenLayer that reads evidence from "
+    "the web and settles a promise with a quote."
+)
+
+RUN = str(time.time_ns())
+
+
+# ---------------------------------------------------------------------------
+# fixtures
+# ---------------------------------------------------------------------------
+
+
+def _deployment() -> dict:
+    if not DEPLOYMENT_PATH.exists():
+        pytest.skip("no deployment.json yet; run the Deploy Contract workflow first")
+    payload = json.loads(DEPLOYMENT_PATH.read_text(encoding="utf-8"))
+    address = str(payload.get("address", "")).strip()
+    if not ADDRESS_VALUE.fullmatch(address):
+        pytest.skip(f"deployment.json has no usable address: {address!r}")
+    return payload
+
+
+@pytest.fixture(scope="module")
+def deployment() -> dict:
+    return _deployment()
+
+
+@pytest.fixture(scope="module")
+def contract(deployment) -> str:
+    print(f"\n[assize] contract {deployment['address']}")
+    return deployment["address"]
+
+
+@pytest.fixture(scope="module")
+def account():
+    return load_account("tester1")
+
+
+@pytest.fixture(scope="module")
+def opponent(account):
+    """A second funded wallet. Without one there is nothing to contest with."""
+    try:
+        other = load_account("tester2")
+    except SystemExit:
+        pytest.skip("no second wallet is configured; a contest would be a self-contest")
+    if _hex(other.address) == _hex(account.address):
+        pytest.skip("the second wallet is the deployer; a contest would be a self-contest")
+    return other
+
+
+@pytest.fixture(scope="module")
+def client(account):
+    return create_client(studionet, account=account)
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _hex(value) -> str:
+    return str(value).lower().replace("0x", "")
+
+
+def _succeeded(result) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("status_name") not in ("ACCEPTED", "FINALIZED"):
+        return False
+    leader = (result.get("consensus_data") or {}).get("leader_receipt")
+    if isinstance(leader, list):
+        leader = leader[0] if leader else None
+    if isinstance(leader, dict):
+        return leader.get("execution_result") == "SUCCESS"
+    return str(result.get("tx_execution_result_name", "")) == "FINISHED_WITH_RETURN"
+
+
+def _definite_rollback(result) -> bool:
+    if not isinstance(result, dict):
+        return False
+    leader = (result.get("consensus_data") or {}).get("leader_receipt")
+    if isinstance(leader, list):
+        leader = leader[0] if leader else None
+    return isinstance(leader, dict) and leader.get("execution_result") == "ERROR"
+
+
+def _attempt(client, account, contract, method, args=None, value=0):
+    try:
+        tx_hash = client.write_contract(
+            contract, method, args=args or [], value=value, account=account
+        )
+        return client.wait_for_transaction_receipt(
+            tx_hash, retries=POLL_RETRIES, interval=POLL_INTERVAL
+        )
+    except Exception as error:
+        return error
+
+
+def _expect_ok(client, account, contract, method, args=None, value=0, verify=None):
+    result = None
+    for attempt in range(3):
+        result = _attempt(client, account, contract, method, args, value)
+        if _succeeded(result):
+            return result
+        if verify is not None and verify():
+            return result
+        if _definite_rollback(result):
+            raise AssertionError(f"{method} was refused: {result}")
+        if attempt < 2:
+            print(f"  {method} did not reach consensus, retrying")
+            time.sleep(RETRY_PAUSE)
+    raise AssertionError(f"{method} did not reach consensus: {result}")
+
+
+def _read(client, contract, method, args=None):
+    """Read a view, retrying a provider hiccup (a 502 is not an answer)."""
+    last = None
+    for attempt in range(3):
+        try:
+            return client.read_contract(contract, method, args=args or [])
+        except Exception as error:
+            last = error
+            if attempt < 2:
+                print(f"  {method} read failed, retrying: {error}")
+                time.sleep(RETRY_PAUSE)
+    raise last
+
+
+def _case(client, contract, case_id):
+    return _read(client, contract, "get_case", [case_id])
+
+
+def _case_ids(client, contract):
+    return list(_read(client, contract, "get_case_ids").get("ids", []))
+
+
+def _ledger(client, contract):
+    return _read(client, contract, "get_ledger")
+
+
+def _balance(client, contract):
+    return int(_read(client, contract, "get_balance"))
+
+
+def _credit(client, contract, who):
+    return int(_read(client, contract, "get_credit", [who.address]))
+
+
+def _invariant_holds(client, contract) -> bool:
+    ledger = _ledger(client, contract)
+    return int(ledger["total_in"]) == int(ledger["total_out"]) + int(ledger["locked_total"])
+
+
+def _file(client, account, contract, ref, claim=CLAIM_TEXT, url=SOURCE_URL, window=WINDOW):
+    before = len(_case_ids(client, contract))
+    _expect_ok(
+        client,
+        account,
+        contract,
+        "file_case",
+        [claim, url, window, f"{ref}-{RUN}"],
+        value=BOND,
+        verify=lambda: len(_case_ids(client, contract)) > before,
+    )
+    ids = _case_ids(client, contract)
+    assert len(ids) > before, "the case was not filed"
+    return ids[-1]
+
+
+def _contest(client, opponent, contract, case_id):
+    _expect_ok(client, opponent, contract, "contest", [case_id], value=BOND)
+    record = _case(client, contract, case_id)
+    assert record["status"] == "CONTESTED", (
+        "the contest did not open a case — a refused payable call answers 'credit' "
+        f"instead of reverting: {record}"
+    )
+    return record
+
+
+def _rule(client, account, contract, case_id):
+    """Rule until the committee answers, or the attempts are spent."""
+    for _ in range(4):
+        record = _case(client, contract, case_id)
+        if record["status"] != "CONTESTED" or int(record["attempts"]) >= 3:
+            return record
+        _expect_ok(client, account, contract, "rule", [case_id])
+    return _case(client, contract, case_id)
+
+
+def _appeal(client, loser, contract, case_id, ground="RECORD"):
+    _expect_ok(
+        client, loser, contract, "appeal", [case_id, ground], value=APPEAL_STAKE
+    )
+    record = _case(client, contract, case_id)
+    assert record["status"] == "APPEALED", (
+        f"the appeal was refused — a payable refusal answers 'credit': {record}"
+    )
+    return record
+
+
+def _judge_appeal(client, account, contract, case_id):
+    for _ in range(4):
+        record = _case(client, contract, case_id)
+        if record["status"] != "APPEALED" or int(record["attempts"]) >= 3:
+            return record
+        _expect_ok(client, account, contract, "judge_appeal", [case_id])
+    return _case(client, contract, case_id)
+
+
+def _void_open_case(client, account, contract, case_id):
+    """Give up on a case the committee could not decide: three attempts, then void."""
+    record = _case(client, contract, case_id)
+    for _ in range(4):
+        if record["status"] not in ("CONTESTED", "APPEALED"):
+            return record
+        if int(record["attempts"]) >= 3:
+            _expect_ok(client, account, contract, "void", [case_id])
+            return _case(client, contract, case_id)
+        if record["status"] == "CONTESTED":
+            _expect_ok(client, account, contract, "rule", [case_id])
+        else:
+            _expect_ok(client, account, contract, "judge_appeal", [case_id])
+        record = _case(client, contract, case_id)
+    return record
+
+
+# ---------------------------------------------------------------------------
+# the court is live
+# ---------------------------------------------------------------------------
+
+
+def test_01_the_court_is_live(client, contract):
+    rules = _read(client, contract, "get_rules")
+    assert int(rules["min_bond"]) == BOND
+    assert int(rules["max_attempts"]) == 3
+    assert set(rules["grounds"]) == {"RECORD", "EVIDENCE"}
+    assert _invariant_holds(client, contract)
+
+
+def test_02_a_case_is_ruled_and_settled(client, account, opponent, contract):
+    case_id = _file(client, account, contract, "live-1")
+    _contest(client, opponent, contract, case_id)
+
+    record = _rule(client, account, contract, case_id)
+    if record["status"] != "RULED":
+        record = _void_open_case(client, account, contract, case_id)
+        assert record["status"] == "VOID", record
+        assert _invariant_holds(client, contract)
+        pytest.skip("the committee could not rule this case; it was voided and refunded")
+
+    print(f"  the first instance ruled {record['ruling']!r}")
+    assert record["quote"], "a ruling must keep the quote that decided it"
+
+    # A ruling nobody appeals is settled once its appeal window has passed.
+    time.sleep(WINDOW + 5)
+
+    ledger_before = _ledger(client, contract)
+    _expect_ok(
+        client,
+        account,
+        contract,
+        "settle",
+        [case_id],
+        verify=lambda: _case(client, contract, case_id)["status"] == "SETTLED",
+    )
+
+    assert _case(client, contract, case_id)["status"] == "SETTLED"
+    ledger = _ledger(client, contract)
+    assert int(ledger["total_out"]) == int(ledger_before["total_out"]) + 2 * BOND
+    assert _invariant_holds(client, contract)
+
+
+def test_03_an_appeal_is_heard_and_settled(client, account, opponent, contract):
+    case_id = _file(client, account, contract, "live-2")
+    _contest(client, opponent, contract, case_id)
+
+    record = _rule(client, account, contract, case_id)
+    if record["status"] != "RULED":
+        record = _void_open_case(client, account, contract, case_id)
+        assert record["status"] == "VOID", record
+        pytest.skip("the committee could not rule this case; it was voided and refunded")
+
+    loser = opponent if record["ruling"] == "SUSTAINED" else account
+    _appeal(client, loser, contract, case_id, ground="RECORD")
+
+    heard = _judge_appeal(client, account, contract, case_id)
+    if heard["status"] != "APPEAL_RULED":
+        heard = _void_open_case(client, account, contract, case_id)
+        assert heard["status"] == "VOID", heard
+        assert _invariant_holds(client, contract)
+        pytest.skip("the second instance could not decide; the case was voided")
+
+    print(
+        f"  the first instance ruled {record['ruling']!r}, "
+        f"the record appeal answered {heard['decision']!r}"
+    )
+
+    ledger_before = _ledger(client, contract)
+    _expect_ok(
+        client,
+        account,
+        contract,
+        "settle",
+        [case_id],
+        verify=lambda: _case(client, contract, case_id)["status"] == "SETTLED",
+    )
+
+    pot = 2 * BOND + APPEAL_STAKE
+    ledger = _ledger(client, contract)
+    assert int(ledger["total_out"]) == int(ledger_before["total_out"]) + pot
+    assert _invariant_holds(client, contract)
+
+
+def test_04_views_agree_with_the_ledger(client, contract):
+    summary = _read(client, contract, "get_summary")
+    cases = _read(client, contract, "get_cases")
+
+    assert int(summary["cases"]) == len(cases)
+    assert int(summary["cases"]) == len(_case_ids(client, contract))
+    assert _balance(client, contract) >= 0
+    assert _invariant_holds(client, contract)
