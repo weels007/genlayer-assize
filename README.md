@@ -44,6 +44,13 @@ deploys the court once, writes the file, and commits it back to `main`.
 | **Network** | GenLayer Studio — chainId `61999` (`0xf22f`), test GEN only |
 | **Evidence** | [Actions](https://github.com/weels007/genlayer-assize/actions) — direct, Studio, money paths, every deployment |
 
+The address above is checked against this repository: `scripts/verify_deployment.py`
+compares the recorded `revision` — the first twelve characters of the SHA-256 of
+`contracts/Assize.py`, written by the deploy script — with the checkout, and the
+money-paths workflow refuses to run when the two disagree. A court with no owner
+cannot be upgraded, so the address and the source have to be provably the same
+thing.
+
 ## Lifecycle
 
 ```mermaid
@@ -150,7 +157,7 @@ Residual risks, stated plainly:
 | Suite | What it covers | Run |
 |---|---|---|
 | **Direct** | filing, contesting, both instances, all grounds, the loser rule, the window, credits, voids and the ledger invariant | `pytest tests/direct -v` |
-| **Studio** | the deployed court: a real filing, a contest, a live ruling, an appeal argued on the record, an appeal argued on the page, and the settlement | `pytest tests/integration -v -s` |
+| **Studio** | the deployed court: a real filing, a contest, a live ruling, an appeal argued on the record, an appeal argued on the page, a case the committee cannot rule that is voided after three attempts, and the settlement | `pytest tests/integration -v -s` |
 | **End to end** | the money paths without a model: mismatched stake, self-contest, withdrawal of a filing, a contested case, an unearned void, and a stranger | `pytest tests/e2e -v -s` |
 
 Every assertion in the live suites is a delta, and every claim reference carries
@@ -178,15 +185,29 @@ Actions secrets — one filer and one contestant — so no key material is commi
 ## Layout
 
 ```text
-contracts/Assize.py              the court
+contracts/Assize.py              the contract
 tests/direct/                    filing, ruling, appeal, views
 tests/integration/               the deployed court, live
 tests/e2e/                       the deployed court's money paths
+testdata/ungroundable.txt        a page no quote can be grounded in
 scripts/deploy.py                deploys once, records deployment.json
+scripts/verify_deployment.py     the address on file is this contract
 scripts/wallet.py                keystore from tests/ or a repository secret
 deployment.json                  the deployed address (written by the workflow)
 .github/workflows/               ci, integration, e2e, deploy-contract
+SUBMISSION.md                    the short pack for a reviewer
 ```
+
+## Submission
+
+[`SUBMISSION.md`](SUBMISSION.md) is the short pack for a reviewer: what the
+contract is, the deployed facts, what each suite proves, and the limits that are
+still true. Every public method — nine writes and ten views — is exercised against
+the deployed address; the Studio suite and the money paths are the evidence.
+
+`python scripts/verify_deployment.py` proves the address and the source are the
+same thing, which is the one claim a reviewer cannot check from the contract
+alone.
 
 ## License
 

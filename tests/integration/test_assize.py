@@ -14,7 +14,9 @@ window, an appeal is settled when the second instance answers, and a case nobody
 could decide is voided with both stakes back.
 
 Both grounds are exercised against the deployed court: one appeal is argued on the
-record alone and one on the page, so the second instance runs both ways.
+record alone and one on the page, so the second instance runs both ways. A case
+filed against a page no quote can be grounded in is ruled three times without ever
+being decided, then voided by the other account, so the void path is live as well.
 
     pytest tests/integration -v -s
 """
@@ -48,6 +50,12 @@ WINDOW = 60
 # minimum, because that one needs the window to close.
 APPEAL_WINDOW = 3600
 SOURCE_URL = "https://raw.githubusercontent.com/weels007/genlayer-vow/main/README.md"
+# A page whose whole text folds to nineteen letters, one short of MIN_QUOTE_CHARS:
+# no quote taken from it can ground, so a case filed against it can never be ruled.
+UNGROUNDABLE_URL = (
+    "https://raw.githubusercontent.com/weels007/genlayer-assize/main/"
+    "testdata/ungroundable.txt"
+)
 CLAIM_TEXT = (
     "The project is an Intelligent Contract for GenLayer that reads evidence from "
     "the web and settles a promise with a quote."
@@ -225,6 +233,9 @@ def _contest(client, opponent, contract, case_id):
         "the contest did not open a case — a refused payable call answers 'credit' "
         f"instead of reverting: {record}"
     )
+    assert _read(client, contract, "is_contested", [case_id]), (
+        "a contested case must say so to anyone who asks"
+    )
     return record
 
 
@@ -236,6 +247,35 @@ def _rule(client, account, contract, case_id):
             return record
         _expect_ok(client, account, contract, "rule", [case_id])
     return _case(client, contract, case_id)
+
+
+def _winner_cannot_appeal(client, winner, contract, case_id, ground):
+    """The side that won cannot buy a second instance, even inside the window."""
+    assert _read(client, contract, "can_appeal", [case_id]), (
+        "the appeal window has to be open for this to prove anything"
+    )
+
+    credit_before = _credit(client, contract, winner)
+    _expect_ok(
+        client, winner, contract, "appeal", [case_id, ground], value=APPEAL_STAKE
+    )
+
+    assert _case(client, contract, case_id)["status"] == "RULED", (
+        f"the winner's appeal was accepted: {_case(client, contract, case_id)}"
+    )
+    assert _credit(client, contract, winner) == credit_before + APPEAL_STAKE, (
+        "the case is ruled, the window is open, the ground and the stake are right, "
+        "so the only refusal left is not_the_loser — and a refused appeal must "
+        "leave the stake as a credit"
+    )
+
+    _expect_ok(
+        client,
+        winner,
+        contract,
+        "withdraw_credit",
+        verify=lambda: _credit(client, contract, winner) == credit_before,
+    )
 
 
 def _appeal(client, loser, contract, case_id, ground="RECORD"):
@@ -311,6 +351,11 @@ def _appealed_case(client, account, opponent, contract, ref, ground):
         pytest.skip(f"the committee could not rule the {ground} case; it was voided")
 
     loser = opponent if record["ruling"] == "SUSTAINED" else account
+    winner = account if loser is opponent else opponent
+
+    # The winner is refused, and the refusal leaves the stake as their credit.
+    _winner_cannot_appeal(client, winner, contract, case_id, ground)
+
     _appeal(client, loser, contract, case_id, ground=ground)
 
     heard = _judge_appeal(client, account, contract, case_id)
@@ -373,7 +418,51 @@ def test_04_an_evidence_appeal_is_heard_and_settled(
     _appealed_case(client, account, opponent, contract, "live-evidence", "EVIDENCE")
 
 
-def test_05_views_agree_with_the_ledger(client, contract):
+def test_05_an_undecidable_case_is_voided(client, account, opponent, contract):
+    """A page no quote can be grounded in: three attempts, then both stakes back."""
+    case_id = _file(
+        client,
+        account,
+        contract,
+        "live-void",
+        url=UNGROUNDABLE_URL,
+        window=APPEAL_WINDOW,
+    )
+    _contest(client, opponent, contract, case_id)
+
+    for attempt in range(3):
+        before = int(_case(client, contract, case_id)["attempts"])
+        _expect_ok(client, account, contract, "rule", [case_id])
+
+        record = _case(client, contract, case_id)
+        assert record["status"] == "CONTESTED", (
+            "the committee grounded a ruling in a page that cannot ground one: "
+            f"{record}"
+        )
+        assert int(record["attempts"]) == before + 1, record
+        assert record["ruling"] == "", record
+
+    ledger_before = _ledger(client, contract)
+
+    # Anyone may void it, so the account that did not file does it.
+    _expect_ok(
+        client,
+        opponent,
+        contract,
+        "void",
+        [case_id],
+        verify=lambda: _case(client, contract, case_id)["status"] == "VOID",
+    )
+
+    assert _case(client, contract, case_id)["status"] == "VOID"
+
+    ledger = _ledger(client, contract)
+    assert int(ledger["total_out"]) == int(ledger_before["total_out"]) + 2 * BOND
+    assert int(ledger["locked_total"]) == int(ledger_before["locked_total"]) - 2 * BOND
+    assert _invariant_holds(client, contract)
+
+
+def test_06_views_agree_with_the_ledger(client, contract):
     summary = _read(client, contract, "get_summary")
     cases = _read(client, contract, "get_cases")
 
