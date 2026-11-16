@@ -150,7 +150,7 @@ Residual risks, stated plainly:
 | Suite | What it covers | Run |
 |---|---|---|
 | **Direct** | filing, contesting, both instances, all grounds, the loser rule, the window, credits, voids and the ledger invariant | `pytest tests/direct -v` |
-| **Studio** | the deployed court: a real filing, a real contest, a live ruling, a live appeal and the settlement | `pytest tests/integration -v -s` |
+| **Studio** | the deployed court: a real filing, a contest, a live ruling, an appeal argued on the record, an appeal argued on the page, and the settlement | `pytest tests/integration -v -s` |
 | **End to end** | the money paths without a model: mismatched stake, self-contest, withdrawal of a filing, a contested case, an unearned void, and a stranger | `pytest tests/e2e -v -s` |
 
 Every assertion in the live suites is a delta, and every claim reference carries

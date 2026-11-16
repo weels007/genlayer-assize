@@ -13,6 +13,9 @@ whichever ruling appears and reports it: a ruling is settled after its appeal
 window, an appeal is settled when the second instance answers, and a case nobody
 could decide is voided with both stakes back.
 
+Both grounds are exercised against the deployed court: one appeal is argued on the
+record alone and one on the page, so the second instance runs both ways.
+
     pytest tests/integration -v -s
 """
 
@@ -278,6 +281,55 @@ def _void_open_case(client, account, contract, case_id):
     return record
 
 
+def _settle_and_check(client, account, contract, case_id, pot):
+    ledger_before = _ledger(client, contract)
+    _expect_ok(
+        client,
+        account,
+        contract,
+        "settle",
+        [case_id],
+        verify=lambda: _case(client, contract, case_id)["status"] == "SETTLED",
+    )
+
+    assert _case(client, contract, case_id)["status"] == "SETTLED"
+    ledger = _ledger(client, contract)
+    assert int(ledger["total_out"]) == int(ledger_before["total_out"]) + pot
+    assert _invariant_holds(client, contract)
+
+
+def _appealed_case(client, account, opponent, contract, ref, ground):
+    """Rule a contested case, appeal it on `ground`, hear it, and settle it."""
+    case_id = _file(client, account, contract, ref, window=APPEAL_WINDOW)
+    _contest(client, opponent, contract, case_id)
+
+    record = _rule(client, account, contract, case_id)
+    if record["status"] != "RULED":
+        record = _void_open_case(client, account, contract, case_id)
+        assert record["status"] == "VOID", record
+        assert _invariant_holds(client, contract)
+        pytest.skip(f"the committee could not rule the {ground} case; it was voided")
+
+    loser = opponent if record["ruling"] == "SUSTAINED" else account
+    _appeal(client, loser, contract, case_id, ground=ground)
+
+    heard = _judge_appeal(client, account, contract, case_id)
+    if heard["status"] != "APPEAL_RULED":
+        heard = _void_open_case(client, account, contract, case_id)
+        assert heard["status"] == "VOID", heard
+        assert _invariant_holds(client, contract)
+        pytest.skip(
+            f"the second instance could not decide the {ground} appeal; it was voided"
+        )
+
+    print(
+        f"  {ground}: the first instance ruled {record['ruling']!r}, "
+        f"the appeal answered {heard['decision']!r}"
+    )
+
+    _settle_and_check(client, account, contract, case_id, 2 * BOND + APPEAL_STAKE)
+
+
 # ---------------------------------------------------------------------------
 # the court is live
 # ---------------------------------------------------------------------------
@@ -308,64 +360,20 @@ def test_02_a_case_is_ruled_and_settled(client, account, opponent, contract):
     # A ruling nobody appeals is settled once its appeal window has passed.
     time.sleep(WINDOW + 5)
 
-    ledger_before = _ledger(client, contract)
-    _expect_ok(
-        client,
-        account,
-        contract,
-        "settle",
-        [case_id],
-        verify=lambda: _case(client, contract, case_id)["status"] == "SETTLED",
-    )
-
-    assert _case(client, contract, case_id)["status"] == "SETTLED"
-    ledger = _ledger(client, contract)
-    assert int(ledger["total_out"]) == int(ledger_before["total_out"]) + 2 * BOND
-    assert _invariant_holds(client, contract)
+    _settle_and_check(client, account, contract, case_id, 2 * BOND)
 
 
-def test_03_an_appeal_is_heard_and_settled(client, account, opponent, contract):
-    case_id = _file(client, account, contract, "live-2", window=APPEAL_WINDOW)
-    _contest(client, opponent, contract, case_id)
-
-    record = _rule(client, account, contract, case_id)
-    if record["status"] != "RULED":
-        record = _void_open_case(client, account, contract, case_id)
-        assert record["status"] == "VOID", record
-        pytest.skip("the committee could not rule this case; it was voided and refunded")
-
-    loser = opponent if record["ruling"] == "SUSTAINED" else account
-    _appeal(client, loser, contract, case_id, ground="RECORD")
-
-    heard = _judge_appeal(client, account, contract, case_id)
-    if heard["status"] != "APPEAL_RULED":
-        heard = _void_open_case(client, account, contract, case_id)
-        assert heard["status"] == "VOID", heard
-        assert _invariant_holds(client, contract)
-        pytest.skip("the second instance could not decide; the case was voided")
-
-    print(
-        f"  the first instance ruled {record['ruling']!r}, "
-        f"the record appeal answered {heard['decision']!r}"
-    )
-
-    ledger_before = _ledger(client, contract)
-    _expect_ok(
-        client,
-        account,
-        contract,
-        "settle",
-        [case_id],
-        verify=lambda: _case(client, contract, case_id)["status"] == "SETTLED",
-    )
-
-    pot = 2 * BOND + APPEAL_STAKE
-    ledger = _ledger(client, contract)
-    assert int(ledger["total_out"]) == int(ledger_before["total_out"]) + pot
-    assert _invariant_holds(client, contract)
+def test_03_a_record_appeal_is_heard_and_settled(client, account, opponent, contract):
+    _appealed_case(client, account, opponent, contract, "live-record", "RECORD")
 
 
-def test_04_views_agree_with_the_ledger(client, contract):
+def test_04_an_evidence_appeal_is_heard_and_settled(
+    client, account, opponent, contract
+):
+    _appealed_case(client, account, opponent, contract, "live-evidence", "EVIDENCE")
+
+
+def test_05_views_agree_with_the_ledger(client, contract):
     summary = _read(client, contract, "get_summary")
     cases = _read(client, contract, "get_cases")
 
