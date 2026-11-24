@@ -117,15 +117,40 @@ def report_funds(client, account) -> None:
     print(f"[deploy] {account.address} holds {held} wei; the network asks {asked} wei")
 
 
-def send_deploy(client, code: str, account) -> str:
-    """Send the deployment, retrying a send the network rejected outright.
+def inflated_fees(client, factor: int):
+    """The quoted fee distribution, with the deposit multiplied.
 
-    A revert means the transaction did not land, so a second send cannot deploy
-    twice, and Studio sometimes passes one it reverted a moment earlier.
+    The quote is built from the validator allocation and the execution budget; a
+    deployment also writes its own source into storage, so a contract that has
+    grown can sit above the quote. Raising only the deposit keeps the same
+    distribution and the same transaction.
+    """
+    try:
+        estimate = client.estimate_transaction_fees()
+    except Exception as error:  # noqa: BLE001 - fall back to the default quote
+        print(f"[deploy] the fee could not be quoted again: {error}")
+        return None
+    distribution = estimate.get("distribution")
+    fee_value = estimate.get("feeValue")
+    if not distribution or not fee_value:
+        return None
+    return {"distribution": distribution, "feeValue": int(fee_value) * factor}
+
+
+def send_deploy(client, code: str, account) -> str:
+    """Send the deployment, paying a larger fee deposit after a revert.
+
+    A revert at the EVM step that carries the deployment happens before any
+    contract code runs, so it says the transaction was not accepted, not that the
+    contract is wrong. The first send uses the quoted fee; later sends multiply the
+    deposit, because the quote is the one number this side can get wrong.
     """
     for attempt in range(DEPLOY_ATTEMPTS):
+        fees = None if attempt == 0 else inflated_fees(client, 2**attempt)
+        if fees:
+            print(f"[deploy] sending again with a fee deposit of {fees['feeValue']} wei")
         try:
-            return client.deploy_contract(code=code, args=[], account=account)
+            return client.deploy_contract(code=code, args=[], account=account, fees=fees)
         except Exception as error:
             if "reverted" not in str(error).lower() or attempt == DEPLOY_ATTEMPTS - 1:
                 raise SystemExit(str(error))
