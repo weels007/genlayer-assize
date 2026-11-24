@@ -99,28 +99,90 @@ def execution_succeeded(receipt) -> bool:
     return str(receipt.get("tx_execution_result_name", "")) == "FINISHED_WITH_RETURN"
 
 
-def send_deploy(client, code: str, account) -> str:
-    """Send the deployment, retrying one the network rejected outright.
+def report_funds(client, account) -> None:
+    """Say what the sender holds and what the network asks for a transaction.
 
-    Studio sometimes reverts the EVM transaction that carries the deployment
-    before the contract is ever instantiated, and the same send then goes through.
-    A revert means the transaction did not land, so trying again cannot deploy
-    twice.
+    Both numbers are printed before the send so a rejected deployment is
+    diagnosable from the log alone: a revert at the EVM step that carries the
+    deployment happens before any contract code runs.
+    """
+    try:
+        held = client.w3.eth.get_balance(account.address)
+    except Exception as error:  # noqa: BLE001 - a diagnostic must not stop a deploy
+        held = f"unknown ({error})"
+    try:
+        asked = client.estimate_transaction_fees().get("feeValue")
+    except Exception as error:  # noqa: BLE001 - a diagnostic must not stop a deploy
+        asked = f"unknown ({error})"
+    print(f"[deploy] {account.address} holds {held} wei; the network asks {asked} wei")
+
+
+def send_deploy(client, code: str, account) -> str:
+    """Send the deployment, retrying a send the network rejected outright.
+
+    A revert means the transaction did not land, so a second send cannot deploy
+    twice, and Studio sometimes passes one it reverted a moment earlier.
     """
     for attempt in range(DEPLOY_ATTEMPTS):
         try:
             return client.deploy_contract(code=code, args=[], account=account)
         except Exception as error:
             if "reverted" not in str(error).lower() or attempt == DEPLOY_ATTEMPTS - 1:
-                raise SystemExit(
-                    f"[deploy] the deployment was rejected: {error}\n"
-                    "[deploy] if this repeats with 'EVM tx ... reverted' before the "
-                    "contract runs, check the deployer's test GEN: Studio reverts a "
-                    "send it cannot charge for, and the faucet is where to top up."
-                )
+                raise SystemExit(str(error))
             print(f"[deploy] the network reverted the send, trying again: {error}")
             time.sleep(RETRY_PAUSE)
-    raise SystemExit("[deploy] the deployment was rejected")
+    raise SystemExit("the deployment was rejected")
+
+
+def deploy_once(code: str, revision: str):
+    """Deploy from the first configured wallet that can send, deployer first.
+
+    The court has no owner, so the account that deploys it leaves no trace in the
+    contract; a second funded wallet is therefore a legitimate way to get the
+    deployment on chain when the deployer cannot pay for it.
+    """
+    rejected = []
+    for name in ("tester1", "tester2"):
+        try:
+            account = load_account(name)
+        except SystemExit as error:
+            print(f"[deploy] no {name} wallet here: {error}")
+            continue
+
+        client = create_client(studionet, account=account)
+        print(
+            f"[deploy] deploying Assize from {account.address} "
+            f"({name}, revision {revision})"
+        )
+        report_funds(client, account)
+
+        try:
+            tx_hash = send_deploy(client, code, account)
+        except SystemExit as error:
+            print(f"[deploy] {name} could not send the deployment: {error}")
+            rejected.append(f"{name} ({account.address}): {error}")
+            continue
+
+        print(f"[deploy] transaction {tx_hash}")
+        receipt = client.wait_for_transaction_receipt(
+            tx_hash, retries=POLL_RETRIES, interval=POLL_INTERVAL
+        )
+        if not execution_succeeded(receipt):
+            raise SystemExit(f"[deploy] the deployment did not succeed: {receipt}")
+
+        address = find_address(receipt)
+        if not address:
+            raise SystemExit(f"[deploy] no contract address in the receipt: {receipt}")
+        return client, address
+
+    raise SystemExit(
+        "[deploy] no configured wallet could send the deployment:\n  "
+        + "\n  ".join(rejected)
+        + "\n[deploy] Studio reverts a transaction it will not accept before any "
+        "contract code runs, so this is about the sender rather than the source: a "
+        "wallet without enough test GEN is the usual reason, and the Studio faucet "
+        "is where to top it up. Then run this workflow again."
+    )
 
 
 def main() -> int:
@@ -141,22 +203,7 @@ def main() -> int:
         )
         return 0
 
-    account = load_account("tester1")
-    client = create_client(studionet, account=account)
-
-    print(f"[deploy] deploying Assize from {account.address} (revision {revision})")
-    tx_hash = send_deploy(client, code, account)
-    print(f"[deploy] transaction {tx_hash}")
-
-    receipt = client.wait_for_transaction_receipt(
-        tx_hash, retries=POLL_RETRIES, interval=POLL_INTERVAL
-    )
-    if not execution_succeeded(receipt):
-        raise SystemExit(f"[deploy] the deployment did not succeed: {receipt}")
-
-    address = find_address(receipt)
-    if not address:
-        raise SystemExit(f"[deploy] no contract address in the receipt: {receipt}")
+    client, address = deploy_once(code, revision)
 
     try:
         rules = client.read_contract(address, "get_rules")
