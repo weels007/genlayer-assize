@@ -785,13 +785,22 @@ Rules:
 
         ruling = str(judgement.get("ruling", ""))
         record_text = str(judgement.get("record", ""))
+        record_digest = str(judgement.get("record_digest", ""))
         case.attempts += 1
         case.reason = _clean_text(str(judgement.get("reason", "")))[:MAX_REASON_CHARS]
 
-        if ruling not in RULINGS or not record_text:
+        # A ruling is only a ruling when three things hold at once: it names a
+        # verdict, it carries the record it was taken from, and that record is the
+        # one every validator hashed. The last check is done here, after consensus,
+        # because paying out on text that does not match its digest is exactly the
+        # attack this design has to survive.
+        if (
+            ruling not in RULINGS
+            or not record_text
+            or not record_digest
+            or _digest_text(record_text) != record_digest
+        ):
             # Not decided: the case stays contested and the stakes stay refundable.
-            # A ruling without a record is not a ruling either, because the record
-            # is the evidence a RECORD appeal would be handed.
             self.cases[case_id] = case
             return ""
 
@@ -799,7 +808,7 @@ Rules:
         case.ruling = ruling
         case.quote = str(judgement.get("quote", ""))
         case.record = record_text
-        case.digest = str(judgement.get("record_digest", ""))
+        case.digest = record_digest
         case.status = CASE_RULED
         case.ruled_ts = u256(now)
         case.appeal_deadline = u256(now + int(case.appeal_window))
