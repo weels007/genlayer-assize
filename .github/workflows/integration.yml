@@ -41,6 +41,12 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
 
+      # No network and no wallet: it compares two files. A suite run against a
+      # stale address proves nothing about the contract in this checkout, and its
+      # failure would look like a contract bug rather than a missing deploy.
+      - name: The deployed court is this source
+        run: python scripts/verify_deployment.py
+
       - name: Check the wallet secrets
         id: secrets
         run: |
