@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 from genlayer_py import create_client, studionet
@@ -26,6 +27,9 @@ DEPLOYMENT_PATH = ROOT / "deployment.json"
 
 POLL_INTERVAL = 10_000
 POLL_RETRIES = 60
+
+DEPLOY_ATTEMPTS = 3
+RETRY_PAUSE = 20
 
 ADDRESS_VALUE = re.compile(r"0x[0-9a-fA-F]{40}")
 
@@ -95,6 +99,30 @@ def execution_succeeded(receipt) -> bool:
     return str(receipt.get("tx_execution_result_name", "")) == "FINISHED_WITH_RETURN"
 
 
+def send_deploy(client, code: str, account) -> str:
+    """Send the deployment, retrying one the network rejected outright.
+
+    Studio sometimes reverts the EVM transaction that carries the deployment
+    before the contract is ever instantiated, and the same send then goes through.
+    A revert means the transaction did not land, so trying again cannot deploy
+    twice.
+    """
+    for attempt in range(DEPLOY_ATTEMPTS):
+        try:
+            return client.deploy_contract(code=code, args=[], account=account)
+        except Exception as error:
+            if "reverted" not in str(error).lower() or attempt == DEPLOY_ATTEMPTS - 1:
+                raise SystemExit(
+                    f"[deploy] the deployment was rejected: {error}\n"
+                    "[deploy] if this repeats with 'EVM tx ... reverted' before the "
+                    "contract runs, check the deployer's test GEN: Studio reverts a "
+                    "send it cannot charge for, and the faucet is where to top up."
+                )
+            print(f"[deploy] the network reverted the send, trying again: {error}")
+            time.sleep(RETRY_PAUSE)
+    raise SystemExit("[deploy] the deployment was rejected")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -117,7 +145,7 @@ def main() -> int:
     client = create_client(studionet, account=account)
 
     print(f"[deploy] deploying Assize from {account.address} (revision {revision})")
-    tx_hash = client.deploy_contract(code=code, args=[], account=account)
+    tx_hash = send_deploy(client, code, account)
     print(f"[deploy] transaction {tx_hash}")
 
     receipt = client.wait_for_transaction_receipt(
