@@ -105,7 +105,7 @@ def test_the_first_instance_must_wait_for_a_contest(
         contract.rule(case_id)
 
 
-def test_a_sustained_ruling_keeps_its_quote(
+def test_a_sustained_ruling_keeps_the_record_it_read(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
     direct_vm.warp("2025-01-01T00:00:00Z")
@@ -115,10 +115,18 @@ def test_a_sustained_ruling_keeps_its_quote(
     assert record["status"] == "RULED"
     assert record["ruling"] == "SUSTAINED"
     assert record["quote"].lower() == QUOTE.lower()
-    assert record["page_digest"] != ""
+    assert record["record_digest"] != ""
+    assert record["record_chars"] == len(PAGE)
     assert record["attempts"] == 1
     assert record["appeal_deadline"] > record["ruled_ts"]
     assert contract.get_summary()["sustained"] == 1
+
+    stored = contract.get_record(case_id)
+    assert stored["record"] == PAGE, (
+        "the record is the whole text the first instance read: a RECORD appeal is "
+        "handed that text, so it cannot be a citation the leader picked out"
+    )
+    assert stored["record_digest"] == record["record_digest"]
 
 
 def test_a_rejected_ruling_is_recorded(
@@ -277,6 +285,34 @@ def test_a_record_appeal_never_touches_the_web(
     # fetched anything, this would fail for the lack of a handler.
     direct_vm.clear_mocks()
     _mock_appeal(direct_vm, "UPHELD")
+
+    assert contract.judge_appeal(case_id) == "UPHELD"
+    assert contract.get_case(case_id)["status"] == "APPEAL_RULED"
+
+
+def test_a_record_appeal_is_handed_the_whole_record(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """The second instance sees the record, not the sentence the first one liked.
+
+    The first instance cites the page's first sentence. The mock below answers only
+    a prompt that also carries the page's second one, which exists nowhere except
+    in the record itself — so the appeal is heard only because it is handed the
+    record rather than the citation.
+    """
+    direct_vm.warp("2025-01-01T00:00:00Z")
+    contract, case_id = _ruled(direct_vm, direct_deploy, direct_alice, direct_bob)
+
+    direct_vm.sender = direct_bob
+    direct_vm.value = APPEAL_STAKE
+    contract.appeal(case_id, "RECORD")
+    direct_vm.value = 0
+
+    direct_vm.clear_mocks()
+    direct_vm.mock_llm(
+        r"(?s).*\[\[ASSIZE_APPEAL\]\].*release notes list every change.*",
+        json.dumps({"decision": "UPHELD", "reason": "the record supports it"}),
+    )
 
     assert contract.judge_appeal(case_id) == "UPHELD"
     assert contract.get_case(case_id)["status"] == "APPEAL_RULED"

@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 BOND = 200
 WINDOW = 3600
 
@@ -88,6 +90,24 @@ def test_unknown_cases_are_never_contested_or_appealable(direct_deploy):
     assert contract.is_contested("az-404") is False
     assert contract.can_appeal("az-404") is False
 
+    with pytest.raises(Exception):
+        contract.get_record("az-404")
+
+
+def test_a_record_lives_behind_its_own_view(direct_vm, direct_deploy, direct_alice):
+    contract = _deployed(direct_deploy)
+    case_id = _filed(direct_vm, contract, direct_alice)
+
+    stored = contract.get_record(case_id)
+    assert stored["case_id"] == case_id
+    assert stored["record"] == ""
+    assert stored["record_chars"] == 0
+    assert stored["record_digest"] == ""
+
+    # Listing cases has to stay small, so the text is not in the listing.
+    assert "record" not in contract.get_case(case_id)
+    assert "record" not in contract.get_cases()[case_id]
+
 
 def test_the_rules_are_public(direct_deploy):
     contract = _deployed(direct_deploy)
@@ -96,4 +116,5 @@ def test_the_rules_are_public(direct_deploy):
     assert rules["min_bond"] == 200
     assert rules["max_attempts"] == 3
     assert rules["min_appeal_window_seconds"] == 60
+    assert rules["max_record_chars"] == rules["max_page_chars"]
     assert set(rules["grounds"]) == {"RECORD", "EVIDENCE"}

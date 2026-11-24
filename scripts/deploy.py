@@ -34,6 +34,9 @@ ADDRESS_VALUE = re.compile(r"0x[0-9a-fA-F]{40}")
 # as the one to test against.
 MIN_BOND = 200
 MAX_ATTEMPTS = 3
+# The record a RECORD appeal argues over is capped here, and its digest is part of
+# consensus. An address that does not enforce this cap is not this contract.
+MAX_RECORD_CHARS = 12000
 
 
 def recorded() -> dict:
@@ -135,6 +138,11 @@ def main() -> int:
 
     if int(rules.get("min_bond", 0)) != MIN_BOND or int(rules.get("max_attempts", 0)) != MAX_ATTEMPTS:
         raise SystemExit(f"[deploy] the contract at {address} has the wrong rules: {rules}")
+    if int(rules.get("max_record_chars", 0)) != MAX_RECORD_CHARS:
+        raise SystemExit(
+            f"[deploy] the contract at {address} does not bind the record a RECORD "
+            f"appeal argues over: {rules}"
+        )
     if int(summary.get("cases", -1)) != 0:
         raise SystemExit(f"[deploy] the court at {address} is not empty: {summary}")
 
