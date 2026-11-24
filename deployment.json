@@ -1,8 +1,8 @@
 {
   "contract": "Assize",
   "network": "GenLayer Studio (61999)",
-  "address": "0xC6B56fE9584bB88f3879545A78D903c297288806",
-  "revision": "3c5beca25666",
-  "explorer": "https://explorer-studio.genlayer.com/address/0xC6B56fE9584bB88f3879545A78D903c297288806",
+  "address": "0xb56a3018d3a078126B089106D1367F60ecfc0047",
+  "revision": "796835cae005",
+  "explorer": "https://explorer-studio.genlayer.com/address/0xb56a3018d3a078126B089106D1367F60ecfc0047",
   "min_bond": 200
 }
