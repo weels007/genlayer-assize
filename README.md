@@ -166,6 +166,11 @@ Residual risks, stated plainly:
   with the ruling is the one every validator agreed on, so a reader can see exactly
   what was judged.
 - A `SILENT` page makes both parties wait: three attempts, then a void.
+- **Studio has been quoting less than it charges.** A send that carries only the
+  quoted fee comes back reverted at the EVM step, before any contract code runs.
+  `scripts/deploy.py` and both live suites therefore retry such a send with a
+  larger deposit. Nothing is half-done by it: a reverted transaction never landed,
+  so the retry is the same call, not a second one.
 
 ## Testing
 

@@ -115,16 +115,50 @@ def _definite_rollback(result) -> bool:
     return isinstance(leader, dict) and leader.get("execution_result") == "ERROR"
 
 
-def _attempt(client, account, contract, method, args=None, value=0):
+# See the Studio suite: the network has been asking more than its client quotes,
+# so a send reverted at the EVM step is tried again with a larger fee deposit.
+SEND_ATTEMPTS = 3
+
+
+def _fees(client, factor: int):
+    """The quoted fee distribution with the deposit multiplied, or None."""
     try:
-        tx_hash = client.write_contract(
-            contract, method, args=args or [], value=value, account=account
-        )
-        return client.wait_for_transaction_receipt(
-            tx_hash, retries=POLL_RETRIES, interval=POLL_INTERVAL
-        )
-    except Exception as error:
-        return error
+        estimate = client.estimate_transaction_fees()
+    except Exception:
+        return None
+    distribution = estimate.get("distribution")
+    fee_value = estimate.get("feeValue")
+    if not distribution or not fee_value:
+        return None
+    return {"distribution": distribution, "feeValue": int(fee_value) * factor}
+
+
+def _attempt(client, account, contract, method, args=None, value=0):
+    last = None
+    for attempt in range(SEND_ATTEMPTS):
+        fees = None if attempt == 0 else _fees(client, 2**attempt)
+        try:
+            tx_hash = client.write_contract(
+                contract,
+                method,
+                args=args or [],
+                value=value,
+                account=account,
+                fees=fees,
+            )
+            return client.wait_for_transaction_receipt(
+                tx_hash, retries=POLL_RETRIES, interval=POLL_INTERVAL
+            )
+        except Exception as error:
+            last = error
+            if "reverted" not in str(error).lower() or attempt == SEND_ATTEMPTS - 1:
+                return error
+            print(
+                f"  {method}: the network reverted the send; trying again with a "
+                f"deposit of {2 ** (attempt + 1)}x the quoted fee"
+            )
+            time.sleep(RETRY_PAUSE)
+    return last
 
 
 def _expect_ok(client, account, contract, method, args=None, value=0, verify=None):

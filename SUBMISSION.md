@@ -76,6 +76,11 @@ one filer and one contestant — so no key material is committed.
   attempts, then anyone may void the case and both sides get their own money back.
   The contract will not guess, and `testdata/ungroundable.txt` exists to prove that
   exit works on demand.
+- **A transaction is retried with a larger fee deposit.** Studio has been
+  reverting sends that carry only the fee its client quotes, at the EVM step and
+  before any contract code runs. The deploy script and both live suites retry with
+  more. A reverted send never landed, so the retry is the same call rather than a
+  second one.
 - **Studio only.** No mainnet, no audited token, no upgrade path — by design.
 
 ## Try it
