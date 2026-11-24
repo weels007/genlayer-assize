@@ -1,12 +1,17 @@
-name: E2E (deployed contract)
+name: Live suites
 
-# The money paths the Studio suite leaves out, against the PINNED court in
-# deployment.json: a mismatched stake becomes a credit and comes back, a filer
-# cannot contest their own case, an uncontested filing can be withdrawn, a
-# contested one cannot, void is refused before it is earned, and a stranger
-# cannot withdraw somebody else's bond.
+# Both suites drive the SAME deployed court: they open markets and buy from them,
+# so they must not interleave — a run that picks the newest market id can pick the
+# other suite's market, which already holds a position.
 #
-# No model is called here on purpose.
+# A concurrency group cannot order them: it holds only ONE pending run, so a push
+# that changed both suites cancelled one of them and its evidence never appeared
+# at all. They are two jobs of one workflow instead, and the money paths wait for
+# the Studio suite.
+#
+# Both jobs refuse to run while deployment.json points at an address that is not
+# this source: a suite run against a stale court proves nothing about the code in
+# the checkout, and its failure would look like a contract bug.
 
 on:
   workflow_dispatch:
@@ -17,26 +22,73 @@ on:
 
   push:
     paths:
+      - "tests/integration/**"
       - "tests/e2e/**"
       - "deployment.json"
-      - ".github/workflows/e2e.yml"
-
-# Shared with the Studio suite: both drive the same deployed court.
-concurrency:
-  group: live-suite
-  cancel-in-progress: false
+      - ".github/workflows/live.yml"
 
 jobs:
-  e2e:
-    name: Money paths on the deployed contract
+  studionet:
+    name: Studio-mode tests
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           # A workflow_run checks out the commit that triggered the deploy, which
           # is older than the deployment.json the bot commits; test main instead.
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      # No network and no wallet: it compares two files.
+      - name: The deployed court is this source
+        run: python scripts/verify_deployment.py
+
+      - name: Check the wallet secrets
+        id: secrets
+        run: |
+          if [ -z "${{ secrets.ASSIZE_DEPLOYER_KEYSTORE }}" ] && [ -z "${{ secrets.SURETY_DEPLOYER_KEYSTORE }}" ] && [ -z "${{ secrets.GAUNTLET_DEPLOYER_KEYSTORE }}" ]; then
+            echo "::notice title=Studio suite skipped::Add ASSIZE_DEPLOYER_KEYSTORE and ASSIZE_DEPLOYER_PASSWORD (or the SURETY_ or GAUNTLET_ pair) to drive the deployed court."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Studio suite
+        if: steps.secrets.outputs.skip != 'true'
+        env:
+          ASSIZE_DEPLOYER_KEYSTORE: ${{ secrets.ASSIZE_DEPLOYER_KEYSTORE }}
+          ASSIZE_DEPLOYER_PASSWORD: ${{ secrets.ASSIZE_DEPLOYER_PASSWORD }}
+          SURETY_DEPLOYER_KEYSTORE: ${{ secrets.SURETY_DEPLOYER_KEYSTORE }}
+          SURETY_DEPLOYER_PASSWORD: ${{ secrets.SURETY_DEPLOYER_PASSWORD }}
+          GAUNTLET_DEPLOYER_KEYSTORE: ${{ secrets.GAUNTLET_DEPLOYER_KEYSTORE }}
+          GAUNTLET_DEPLOYER_PASSWORD: ${{ secrets.GAUNTLET_DEPLOYER_PASSWORD }}
+          # The second side of a case needs a genuinely different account.
+          ASSIZE_TESTER2_KEYSTORE: ${{ secrets.ASSIZE_TESTER2_KEYSTORE }}
+          ASSIZE_TESTER2_PASSWORD: ${{ secrets.ASSIZE_TESTER2_PASSWORD }}
+          ASSIZE_TESTER_KEYSTORE2: ${{ secrets.ASSIZE_TESTER_KEYSTORE2 }}
+          ASSIZE_TESTER_PASSWORD2: ${{ secrets.ASSIZE_TESTER_PASSWORD2 }}
+          SURETY_TESTER2_KEYSTORE: ${{ secrets.SURETY_TESTER2_KEYSTORE }}
+          SURETY_TESTER2_PASSWORD: ${{ secrets.SURETY_TESTER2_PASSWORD }}
+          SURETY_TESTER_KEYSTORE2: ${{ secrets.SURETY_TESTER_KEYSTORE2 }}
+          SURETY_TESTER_PASSWORD2: ${{ secrets.SURETY_TESTER_PASSWORD2 }}
+          GAUNTLET_TESTER2_KEYSTORE: ${{ secrets.GAUNTLET_TESTER2_KEYSTORE }}
+          GAUNTLET_TESTER2_PASSWORD: ${{ secrets.GAUNTLET_TESTER2_PASSWORD }}
+          GAUNTLET_TESTER_KEYSTORE2: ${{ secrets.GAUNTLET_TESTER_KEYSTORE2 }}
+          GAUNTLET_TESTER_PASSWORD2: ${{ secrets.GAUNTLET_TESTER_PASSWORD2 }}
+        run: pytest tests/integration -v -s -rs
+
+  e2e:
+    name: Money paths on the deployed contract
+    needs: studionet
+    if: ${{ !cancelled() && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
           ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
       - uses: actions/setup-python@v5
         with:

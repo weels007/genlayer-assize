@@ -52,10 +52,9 @@ deploys the court once, writes the file, and commits it back to `main`.
 
 The address above is checked against this repository: `scripts/verify_deployment.py`
 compares the recorded `revision` — the first twelve characters of the SHA-256 of
-`contracts/Assize.py`, written by the deploy script — with the checkout, and the
-money-paths workflow refuses to run when the two disagree. A court with no owner
-cannot be upgraded, so the address and the source have to be provably the same
-thing.
+`contracts/Assize.py`, written by the deploy script — with the checkout, and both
+live suites refuse to run when the two disagree. A court with no owner cannot be
+upgraded, so the address and the source have to be provably the same thing.
 
 ## Lifecycle
 
@@ -215,7 +214,7 @@ scripts/deploy.py                deploys once, records deployment.json
 scripts/verify_deployment.py     the address on file is this contract
 scripts/wallet.py                keystore from tests/ or a repository secret
 deployment.json                  the deployed address (written by the workflow)
-.github/workflows/               ci, integration, e2e, deploy-contract
+.github/workflows/               ci, live, deploy-contract
 SUBMISSION.md                    the short pack for a reviewer
 ```
 
