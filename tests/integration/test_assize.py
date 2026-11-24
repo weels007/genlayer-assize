@@ -350,6 +350,13 @@ def _appealed_case(client, account, opponent, contract, ref, ground):
         assert _invariant_holds(client, contract)
         pytest.skip(f"the committee could not rule the {ground} case; it was voided")
 
+    stored = _read(client, contract, "get_record", [case_id])
+    assert stored["record"], (
+        f"the {ground} case was ruled but wrote no record: the appeal would have "
+        "no agreed evidence to argue over"
+    )
+    assert stored["record_digest"] == record["record_digest"]
+
     loser = opponent if record["ruling"] == "SUSTAINED" else account
     winner = account if loser is opponent else opponent
 
@@ -368,8 +375,9 @@ def _appealed_case(client, account, opponent, contract, ref, ground):
         )
 
     print(
-        f"  {ground}: the first instance ruled {record['ruling']!r}, "
-        f"the appeal answered {heard['decision']!r}"
+        f"  {ground}: the first instance ruled {record['ruling']!r} on a "
+        f"{stored['record_chars']}-character record, the appeal answered "
+        f"{heard['decision']!r}"
     )
 
     _settle_and_check(client, account, contract, case_id, 2 * BOND + APPEAL_STAKE)
@@ -401,6 +409,16 @@ def test_02_a_case_is_ruled_and_settled(client, account, opponent, contract):
 
     print(f"  the first instance ruled {record['ruling']!r}")
     assert record["quote"], "a ruling must keep the quote that decided it"
+
+    # The record is the evidence a RECORD appeal is handed, and its digest is part
+    # of the consensus that wrote the ruling.
+    stored = _read(client, contract, "get_record", [case_id])
+    assert stored["record"], (
+        "a ruling has to write down the whole record it read: without it a RECORD "
+        "appeal would have nothing but a sentence of the leader's choosing"
+    )
+    assert int(stored["record_chars"]) == len(stored["record"])
+    assert stored["record_digest"] == record["record_digest"]
 
     # A ruling nobody appeals is settled once its appeal window has passed.
     time.sleep(WINDOW + 5)

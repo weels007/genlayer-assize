@@ -3,14 +3,15 @@
 **A court with two instances — and one of them never touches the web.**
 
 Two people disagree about one sentence and one page. Each posts the same bond. The
-first instance reads the page once, rules `SUSTAINED` or `REJECTED`, and must copy
-the sentence it relied on.
+first instance reads the page once, rules `SUSTAINED` or `REJECTED`, copies the
+sentence it relied on, and writes down the whole record it read.
 
 The loser may appeal **once**, and must say on what ground:
 
 - **RECORD** — "the ruling misread its own evidence". The second instance is given
-  the claim, the ruling, and that quoted sentence, and it never fetches anything.
-  Its only question is whether the quote, by itself, justifies the ruling.
+  the claim, the ruling, and **the record the first instance read**, and it never
+  fetches anything. Its only question is whether the ruling follows from that
+  record.
 - **EVIDENCE** — "the page was read wrongly". The second instance reads the page
   again, this time with the first ruling in front of it.
 
@@ -21,12 +22,17 @@ way, and a judgement nobody could ground moves nothing and can always be voided.
 
 ## Why it is a different model
 
-Three things here are not in the usual "an AI judges a page" contract:
+Four things here are not in the usual "an AI judges a page" contract:
 
 - **The appeal is a different question, not a second opinion.** A `RECORD` appeal
-  asks whether the *decision taken from a quote* follows from that quote. No web
-  access at all — so a page that changed since the ruling cannot reach it, and the
-  second instance cannot be argued with by rewriting the page.
+  asks whether the decision follows from the record as it was read. No web access
+  at all — so a page that changed since the ruling cannot reach it, and the second
+  instance cannot be argued with by rewriting the page.
+- **The record the appeal reads is agreed before it is written.** Validators
+  compare the keccak digest of the record along with the ruling, so a committee
+  that read two different pages writes nothing. A leader cannot hand the appeal
+  evidence of its own choosing: the cited sentence is stored for a human reader,
+  and no later call reads it.
 - **Two instances, one appeal, then final.** The loser chooses which question the
   court answers next, and the bond says how much that choice is worth.
 - **A first instance that never rules costs nobody anything.** If the committee
@@ -57,7 +63,7 @@ thing.
 flowchart LR
   F["file_case(claim, url, window) · bond"] --> C1[FILED]
   C1 -- "contest · matching bond" --> C2[CONTESTED]
-  C2 -- "rule" --> R[RULED<br/>quote stored]
+  C2 -- "rule" --> R[RULED<br/>record + digest stored]
   R -- "no appeal + window" --> S[SETTLED<br/>pot to winner]
   R -- "loser appeals · 2× bond" --> A[APPEALED]
   A -- "RECORD: no web" --> S
@@ -73,9 +79,9 @@ flowchart LR
 |---|---|
 | **File** | A claim (10–400 chars), an `https` page, a bond of at least `MIN_BOND`, and a caller-scoped reference so a replay cannot mint a second case. |
 | **Contest** | A different account posts the same bond. No model is involved. |
-| **Rule** | Permissionless. The page is fetched once inside a non-deterministic block, capped at `MAX_PAGE_CHARS`; the model answers `SUSTAINED`, `REJECTED` or `SILENT` with a verbatim quote. |
-| **Ground** | The quote must appear in the page after folding to letters and digits. A ruling whose quote cannot be grounded is not a ruling. |
-| **Consensus** | Validators re-run the same instance and must produce the same `ruling` (or the same `decision` for an appeal). |
+| **Rule** | Permissionless. The page is fetched once inside a non-deterministic block, capped at `MAX_PAGE_CHARS`; the model answers `SUSTAINED`, `REJECTED` or `SILENT` with a verbatim quote. That capped text is the **record**: it is stored with the ruling. |
+| **Ground** | The quote must appear in the page after folding to letters and digits. It is a pointer for a reader — no later call reads it. |
+| **Consensus** | Validators re-run the same instance and must produce the same `ruling` **and the same record digest**, so the text a `RECORD` appeal will argue over is text every validator read. An appeal is compared on its `decision`. |
 | **Settle** | The winner takes `bond × 2` plus `bond × 2` more if there was an appeal. |
 
 ### Error taxonomy
@@ -124,6 +130,7 @@ Invariant: `total_in == total_out + locked_total`, credits included.
 | Method | Returns |
 |---|---|
 | `get_case(id)` · `get_cases()` · `get_case_ids()` | a case, all cases, the id list |
+| `get_record(id)` | the text the court read, which a `RECORD` appeal argues over |
 | `is_contested(id)` · `can_appeal(id)` | whether a case has two sides, whether the window is still open |
 | `get_credit(address)` · `get_ledger()` · `get_balance()` | credits, `total_in`, `total_out`, `locked_total`, real balance |
 | `get_summary()` · `get_rules()` | counters, and the bounds the contract enforces |
@@ -132,8 +139,10 @@ Invariant: `total_in == total_out + locked_total`, credits included.
 
 | Risk | How Assize answers it |
 |---|---|
-| A second instance that just asks the model again | `RECORD` runs on the claim, the ruling and the quote only, with no web access, so it cannot be moved by rewriting the page. The direct suite proves it runs with no page handler at all. |
-| Stored text steering a later decision without consensus | The compared fields are `ruling` and `decision`. Quotes, reasons and digests are descriptive and no later call reads them as a decision. |
+| A second instance that just asks the model again | `RECORD` runs on the claim, the ruling and the stored record only, with no web access, so it cannot be moved by rewriting the page. The direct suite proves it runs with no page handler at all. |
+| A ruling whose citation the committee never agreed on | The first instance returns the whole record and its keccak digest, and both are compared. The stored record is therefore the text every validator read, and the `RECORD` appeal is never shown the cited sentence — so a leader cannot pick the evidence the appeal argues over and flip the payout. |
+| A leader that sends a record and a digest describing different bytes | The contract recomputes the keccak over the record it is about to store and refuses to rule when it does not match, in deterministic code after consensus, so text that was never agreed on cannot reach the appeal. |
+| Stored text steering a later decision without consensus | The compared fields are `ruling` with the record digest, and `decision`. The record is consensus-bound; the quote, the reasons and the appeal's own quote are descriptive and no later call reads them as a decision. |
 | An ungrounded citation deciding a case | A ruling without a quote taken from the page becomes undecided, which moves nothing. |
 | The loser could stall forever | `settle` is permissionless after the window, and `void` is permissionless once the attempts are spent. |
 | One side taking the other's money | Every payout goes to the stored party: the filer, the contestant, or the appellant. A stranger's `withdraw_case` is refused as `not_filer`. |
@@ -145,19 +154,25 @@ Invariant: `total_in == total_out + locked_total`, credits included.
 
 Residual risks, stated plainly:
 
-- **`RECORD` judges entailment, not truth.** It can uphold a ruling whose quote is
-  sincere but incomplete. That is the price of a second instance that never reads
-  the web, and the reason the ground is recorded on-chain.
-- A page can change between the filing and the ruling. The digest is stored so a
-  reader can see what was read, but validators do not compare a live page.
+- **`RECORD` judges the record, not the page as it is now.** It asks whether the
+  ruling follows from the text the first instance read; a page rewritten after the
+  ruling is invisible to it, which is the point of a second instance with no web
+  access.
+- **A page that changes while the committee reads it cannot be ruled.** Two
+  validators that read different text produce different record digests, consensus
+  writes nothing, and the case books an attempt instead of settling on a record
+  nobody agreed on. A page with a clock or a rotating banner on it is not a page
+  this court can rule; three attempts and anyone may void it. The digest stored
+  with the ruling is the one every validator agreed on, so a reader can see exactly
+  what was judged.
 - A `SILENT` page makes both parties wait: three attempts, then a void.
 
 ## Testing
 
 | Suite | What it covers | Run |
 |---|---|---|
-| **Direct** | filing, contesting, both instances, all grounds, the loser rule, the window, credits, voids and the ledger invariant | `pytest tests/direct -v` |
-| **Studio** | the deployed court: a real filing, a contest, a live ruling, an appeal argued on the record, an appeal argued on the page, a case the committee cannot rule that is voided after three attempts, and the settlement | `pytest tests/integration -v -s` |
+| **Direct** | filing, contesting, both instances, all grounds, the loser rule, the window, credits, voids, the record a `RECORD` appeal reads and the consensus that binds it, and the ledger invariant | `pytest tests/direct -v` |
+| **Studio** | the deployed court: a real filing, a contest, a live ruling that keeps the record it read, an appeal argued on the record, an appeal argued on the page, a case the committee cannot rule that is voided after three attempts, and the settlement | `pytest tests/integration -v -s` |
 | **End to end** | the money paths without a model: mismatched stake, self-contest, withdrawal of a filing, a contested case, an unearned void, and a stranger | `pytest tests/e2e -v -s` |
 
 Every assertion in the live suites is a delta, and every claim reference carries
@@ -177,7 +192,8 @@ python scripts/deploy.py               # deploy once, record deployment.json
 ```
 
 The direct suite mocks the page and the model; both instances, both grounds, the
-window, every refund and the loser rule are exercised in memory.
+window, every refund, the loser rule and the record binding are exercised in
+memory.
 
 The live suites sign with throwaway Studio accounts that the repository keeps in
 Actions secrets — one filer and one contestant — so no key material is committed.
@@ -202,7 +218,7 @@ SUBMISSION.md                    the short pack for a reviewer
 
 [`SUBMISSION.md`](SUBMISSION.md) is the short pack for a reviewer: what the
 contract is, the deployed facts, what each suite proves, and the limits that are
-still true. Every public method — nine writes and ten views — is exercised against
+still true. Every public method — nine writes and eleven views — is exercised against
 the deployed address; the Studio suite and the money paths are the evidence.
 
 `python scripts/verify_deployment.py` proves the address and the source are the
