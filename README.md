@@ -90,7 +90,13 @@ flowchart LR
 | `[EXPECTED]` | bad input, wrong caller, wrong stake, a case in the wrong state | deterministic, must match |
 | `[EXTERNAL]` | the page is empty | deterministic, recorded |
 | `[TRANSIENT]` | network / 5xx, page unreachable | both transient means agreement, retry |
-| `[LLM_ERROR]` | malformed choice, ungrounded quote | always disagrees → new leader |
+| `[LLM_ERROR]` | a model response that is not JSON at all | always disagrees → new leader |
+
+A choice the committee cannot read, and a quote that cannot be grounded in the
+page, are **undecided** rather than errors: the write lands, an attempt is
+booked, and after three attempts anyone may void the case. The answer is read as
+whole words, so `SUSTAINED`, `UPHELD` and "the record supports the ruling" are
+understood, and a negated or ambiguous answer guesses nothing.
 
 ## Money rules
 

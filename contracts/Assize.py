@@ -282,20 +282,61 @@ def _coerce_payload(raw) -> dict:
     raise gl.vm.UserError(ERROR_LLM + ":unsupported_llm_response")
 
 
-def _normalize_choice(raw, allowed) -> str:
-    """Map a model's word onto the allowed set, with SILENT meaning "undecided".
+# The words a model may use for each answer. The second instance is asked about a
+# ruling the first one entered, and models answer in that instance's vocabulary:
+# "SUSTAINED" for a ruling that stands, "REJECTED" for one that does not. A
+# negated or ambiguous answer is undecided rather than a guess.
+CHOICE_ALIASES = {
+    "SUSTAINED": ("SUSTAINED", "SUSTAIN", "SUPPORTS", "UPHELD", "UPHOLD", "AFFIRMED"),
+    "REJECTED": ("REJECTED", "REJECT", "OVERTURNED", "OVERTURN", "REVERSED"),
+    "UPHELD": ("UPHELD", "UPHOLD", "SUSTAINED", "SUPPORTS", "AFFIRMED"),
+    "OVERTURNED": ("OVERTURNED", "OVERTURN", "REJECTED", "REVERSED"),
+}
 
-    An undecided judgement has to be expressible: if it were an error instead,
-    the write would roll back and the attempt counter would never move, so a case
-    the committee cannot decide could never be voided.
+UNDECIDED_WORDS = ("SILENT", "UNDECIDED", "UNRESOLVED", "UNSURE", "UNCLEAR", "UNKNOWN")
+NEGATION_WORDS = (
+    "NOT",
+    "NEVER",
+    "NO",
+    "CANNOT",
+    "FALSE",
+    "WRONG",
+    "INVALID",
+    "NEITHER",
+)
+
+
+def _normalize_choice(raw, allowed) -> str:
+    """Map a model's answer onto the allowed set, with SILENT meaning "undecided".
+
+    Only whole words are read. An answer that names no allowed word, or that is
+    negated or ambiguous, is undecided rather than a guess: an undecided
+    judgement has to be expressible, because if it were an error instead the write
+    would roll back, the attempt counter would never move, and a case the
+    committee cannot decide could never be voided.
     """
-    word = _clean_text(str(raw)).upper()
-    if "SILENT" in word or "UNDECIDED" in word:
+    tokens = [
+        token.strip(".,:;!?\"'()[]{}")
+        for token in _clean_text(str(raw)).upper()
+        .replace("_", " ")
+        .replace("-", " ")
+        .replace("/", " ")
+        .split()
+    ]
+    words = [token for token in tokens if token]
+    if any(word in UNDECIDED_WORDS for word in words):
         return ""
+    if any(word in NEGATION_WORDS for word in words):
+        return ""
+
+    hits = []
     for candidate in allowed:
-        if candidate in word:
-            return candidate
-    raise gl.vm.UserError(ERROR_LLM + ":bad_choice")
+        aliases = CHOICE_ALIASES.get(candidate, (candidate,))
+        if any(word in aliases for word in words):
+            hits.append(candidate)
+    if len(hits) == 1:
+        return hits[0]
+    return ""
 
 
 def _error_text(value) -> str:

@@ -318,6 +318,87 @@ def test_a_record_appeal_is_handed_the_whole_record(
     assert contract.get_case(case_id)["status"] == "APPEAL_RULED"
 
 
+def _ready_to_hear(
+    direct_vm, direct_deploy, filer, contestant, ground="RECORD", ruling="SUSTAINED"
+):
+    """Rule a case, appeal it, and leave the second instance waiting."""
+    direct_vm.warp("2025-01-01T00:00:00Z")
+    contract, case_id = _ruled(
+        direct_vm, direct_deploy, filer, contestant, ruling=ruling
+    )
+
+    loser = contestant if ruling == "SUSTAINED" else filer
+    direct_vm.sender = loser
+    direct_vm.value = APPEAL_STAKE
+    contract.appeal(case_id, ground)
+    direct_vm.value = 0
+
+    direct_vm.clear_mocks()
+    return contract, case_id
+
+
+def test_the_appeal_understands_the_rulings_own_words(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """A model that answers in the first instance's vocabulary is understood.
+
+    The second instance is asked about a ruling the first one entered, and models
+    answer with that instance's word: a ruling that stands is UPHELD, and one that
+    does not is OVERTURNED. Neither answer is an error.
+    """
+    contract, case_id = _ready_to_hear(
+        direct_vm, direct_deploy, direct_alice, direct_bob
+    )
+
+    _mock_appeal(direct_vm, "SUSTAINED")
+    assert contract.judge_appeal(case_id) == "UPHELD"
+    assert contract.get_case(case_id)["status"] == "APPEAL_RULED"
+
+
+def test_the_appeal_reads_a_prose_answer(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, case_id = _ready_to_hear(
+        direct_vm, direct_deploy, direct_alice, direct_bob
+    )
+
+    _mock_appeal(direct_vm, "the record supports the ruling")
+    assert contract.judge_appeal(case_id) == "UPHELD"
+
+
+def test_a_negated_or_ambiguous_answer_is_undecided(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    """A negated answer guesses nothing: the case books an attempt instead.
+
+    A guess here would pay one side on the strength of a misread word, so the
+    contract refuses to decide and the attempt counter moves.
+    """
+    contract, case_id = _ready_to_hear(
+        direct_vm, direct_deploy, direct_alice, direct_bob
+    )
+
+    _mock_appeal(direct_vm, "not upheld")
+    assert contract.judge_appeal(case_id) == ""
+
+    record = contract.get_case(case_id)
+    assert record["status"] == "APPEALED"
+    assert record["decision"] == ""
+    assert record["attempts"] == 1
+
+
+def test_the_ruling_understands_the_appeals_words(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, case_id = _ruled(
+        direct_vm, direct_deploy, direct_alice, direct_bob, ruling="upheld"
+    )
+
+    record = contract.get_case(case_id)
+    assert record["ruling"] == "SUSTAINED"
+    assert record["status"] == "RULED"
+
+
 def test_an_evidence_appeal_does_read_the_page(
     direct_vm, direct_deploy, direct_alice, direct_bob
 ):
