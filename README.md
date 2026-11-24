@@ -46,7 +46,7 @@ deploys the court once, writes the file, and commits it back to `main`.
 
 | | |
 |---|---|
-| **Contract** | [`0xC6B56fE9584bB88f3879545A78D903c297288806`](https://explorer-studio.genlayer.com/address/0xC6B56fE9584bB88f3879545A78D903c297288806) |
+| **Contract** | [`0xb56a3018d3a078126B089106D1367F60ecfc0047`](https://explorer-studio.genlayer.com/address/0xb56a3018d3a078126B089106D1367F60ecfc0047) |
 | **Network** | GenLayer Studio — chainId `61999` (`0xf22f`), test GEN only |
 | **Evidence** | [Actions](https://github.com/weels007/genlayer-assize/actions) — direct, Studio, money paths, every deployment |
 

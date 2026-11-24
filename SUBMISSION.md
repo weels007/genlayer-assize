@@ -36,8 +36,8 @@ a leader cannot pick the evidence that decides the payout.
 | | |
 |---|---|
 | Network | GenLayer Studio — chainId `61999` (`0xf22f`) |
-| Contract | [`0xC6B56fE9584bB88f3879545A78D903c297288806`](https://explorer-studio.genlayer.com/address/0xC6B56fE9584bB88f3879545A78D903c297288806) |
-| Source revision | `3c5beca25666` — the first twelve characters of the SHA-256 of `contracts/Assize.py` |
+| Contract | [`0xb56a3018d3a078126B089106D1367F60ecfc0047`](https://explorer-studio.genlayer.com/address/0xb56a3018d3a078126B089106D1367F60ecfc0047) |
+| Source revision | `796835cae005` — the first twelve characters of the SHA-256 of `contracts/Assize.py` |
 | Owner | none: no pause, no setter, no upgrade path |
 | Money | test GEN only |
 
